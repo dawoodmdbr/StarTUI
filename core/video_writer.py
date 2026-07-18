@@ -35,6 +35,15 @@ def _target_size(w, h, target_height):
     return new_w, new_h
 
 
+def _read_image(path):
+    """cv2.imread that fails loudly instead of silently returning None
+    for a missing or corrupted file (also keeps type checkers happy)."""
+    frame = cv2.imread(str(path))
+    if frame is None:
+        raise ValueError(f"Could not read image: {path}")
+    return frame
+
+
 def _frame_schedule(num_images, duration):
     """
     Map each output frame (at PLAYBACK_FPS) to a source image index, so a
@@ -71,7 +80,7 @@ def _resize_if_needed(frame, out_w, out_h):
 
 
 def _write_with_ffmpeg(images, output_path, schedule, target_height, accumulate, progress_callback):
-    first = cv2.imread(str(images[0]))
+    first = _read_image(images[0])
     h, w = first.shape[:2]
     out_w, out_h = _target_size(w, h, target_height)
 
@@ -85,6 +94,7 @@ def _write_with_ffmpeg(images, output_path, schedule, target_height, accumulate,
         str(output_path),
     ]
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    assert proc.stdin is not None
 
     cache = {}
     trail = None
@@ -92,7 +102,7 @@ def _write_with_ffmpeg(images, output_path, schedule, target_height, accumulate,
 
     for out_i, src_i in enumerate(schedule, start=1):
         if src_i not in cache:
-            frame = cv2.imread(str(images[src_i]))
+            frame = _read_image(images[src_i])
             if accumulate:
                 trail = frame if trail is None else np.maximum(trail, frame)
                 frame_out = trail.copy()
@@ -109,13 +119,12 @@ def _write_with_ffmpeg(images, output_path, schedule, target_height, accumulate,
 
 
 def _write_with_opencv(images, output_path, schedule, target_height, accumulate, progress_callback):
-    first = cv2.imread(str(images[0]))
+    first = _read_image(images[0])
     h, w = first.shape[:2]
     out_w, out_h = _target_size(w, h, target_height)
 
-    video = cv2.VideoWriter(
-        str(output_path), cv2.VideoWriter_fourcc(*"mp4v"), PLAYBACK_FPS, (out_w, out_h)
-    )
+    fourcc = cv2.VideoWriter.fourcc(*"mp4v")
+    video = cv2.VideoWriter(str(output_path), fourcc, PLAYBACK_FPS, (out_w, out_h))
 
     cache = {}
     trail = None
@@ -123,7 +132,7 @@ def _write_with_opencv(images, output_path, schedule, target_height, accumulate,
 
     for out_i, src_i in enumerate(schedule, start=1):
         if src_i not in cache:
-            frame = cv2.imread(str(images[src_i]))
+            frame = _read_image(images[src_i])
             if accumulate:
                 trail = frame if trail is None else np.maximum(trail, frame)
                 frame_out = trail.copy()

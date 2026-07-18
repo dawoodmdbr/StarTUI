@@ -1,31 +1,17 @@
 """Star trail timelapse: video where trails accumulate frame by frame."""
 
-import cv2
-import numpy as np
+from core.video_writer import write_video
 
 
-def generate_trail_video(images, output_path, fps, progress_callback=None):
+def generate_trail_video(images, output_path, duration, target_height=None, progress_callback=None):
     """
     Write a video where each frame accumulates a growing star trail,
-    using the native resolution of the first image.
+    stretched to fill `duration` seconds at a smooth constant frame rate.
+    target_height resizes preserving aspect ratio (None = native resolution).
     """
-    first_frame = cv2.imread(str(images[0]))
-    h, w = first_frame.shape[:2]
-
-    video = cv2.VideoWriter(
-        str(output_path),
-        cv2.VideoWriter_fourcc(*"mp4v"),
-        fps,
-        (w, h)
+    write_video(
+        images, output_path, duration,
+        target_height=target_height, accumulate=True,
+        progress_callback=progress_callback,
     )
-
-    trail = None
-    for i, image_path in enumerate(images, start=1):
-        frame = cv2.imread(str(image_path))
-        trail = frame if trail is None else np.maximum(trail, frame)
-        video.write(trail)
-        if progress_callback:
-            progress_callback(i, len(images))
-
-    video.release()
     return output_path

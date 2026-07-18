@@ -1,28 +1,17 @@
-"""Timelapse video generation at native image resolution."""
+"""Timelapse video generation, native aspect ratio, smooth playback."""
 
-import cv2
+from core.video_writer import write_video
 
 
-def generate_timelapse(images, output_path, fps, progress_callback=None):
+def generate_timelapse(images, output_path, duration, target_height=None, progress_callback=None):
     """
-    Write a timelapse video from a sequence of images, using the
-    native resolution of the first image.
+    Write a timelapse video from a sequence of images, stretched to fill
+    `duration` seconds at a smooth constant frame rate. target_height
+    resizes preserving aspect ratio (None = native resolution).
     """
-    first_frame = cv2.imread(str(images[0]))
-    h, w = first_frame.shape[:2]
-
-    video = cv2.VideoWriter(
-        str(output_path),
-        cv2.VideoWriter_fourcc(*"mp4v"),
-        fps,
-        (w, h)
+    write_video(
+        images, output_path, duration,
+        target_height=target_height, accumulate=False,
+        progress_callback=progress_callback,
     )
-
-    for i, image_path in enumerate(images, start=1):
-        frame = cv2.imread(str(image_path))
-        video.write(frame)
-        if progress_callback:
-            progress_callback(i, len(images))
-
-    video.release()
     return output_path
