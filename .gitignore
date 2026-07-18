@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+
+# generated content — don't ship other people's night sky photos or your renders
+input/*
+!input/.gitkeep
+output/
+
+# common Python env clutter
+.venv/
+venv/
+*.egg-info/
