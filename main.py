@@ -18,10 +18,12 @@ from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn
 from core.star_trail import generate_star_trail
 from core.timelapse import generate_timelapse
 from core.trail_video import generate_trail_video
+from core.video_writer import output_frame_count
 
 console = Console()
 
 DURATION_CHOICES = ["5", "10", "15"]
+RESOLUTION_CHOICES = {"720p": 720, "1080p": 1080, "Original": None}
 INPUT_DIR = Path("input")
 OUTPUT_DIR = Path("output")
 
@@ -78,6 +80,7 @@ def main():
         sys.exit(0)
 
     duration = None
+    target_height = None
     if "trail_video" in outputs or "timelapse" in outputs:
         duration = int(
             questionary.select(
@@ -86,6 +89,12 @@ def main():
                 default="5",
             ).ask()
         )
+        resolution = questionary.select(
+            "Video resolution (aspect ratio preserved):",
+            choices=list(RESOLUTION_CHOICES.keys()),
+            default="1080p",
+        ).ask()
+        target_height = RESOLUTION_CHOICES[resolution]
 
     table = Table(title="Job Summary", show_header=False, border_style="cyan")
     table.add_row("Input folder", str(folder))
@@ -93,6 +102,7 @@ def main():
     table.add_row("Outputs", ", ".join(outputs))
     if duration:
         table.add_row("Duration", f"{duration}s")
+        table.add_row("Resolution", resolution)
     console.print(table)
 
     if not questionary.confirm("Proceed?", default=True).ask():
@@ -100,32 +110,36 @@ def main():
         sys.exit(0)
 
     OUTPUT_DIR.mkdir(exist_ok=True)
-    fps = len(images) / duration if duration else None
 
     jobs = []
     if "image" in outputs:
-        jobs.append(("Star Trail Image", generate_star_trail, OUTPUT_DIR / "startrail.jpg", ()))
+        jobs.append(("Star Trail Image", generate_star_trail, OUTPUT_DIR / "startrail.jpg", (), len(images)))
     if "trail_video" in outputs:
-        jobs.append(("Star Trail Video", generate_trail_video, OUTPUT_DIR / "trail_timelapse.mp4", (fps,)))
+        video_frames = output_frame_count(duration)
+        jobs.append(("Star Trail Video", generate_trail_video, OUTPUT_DIR / "trail_timelapse.mp4", (duration, target_height), video_frames))
     if "timelapse" in outputs:
-        jobs.append(("Timelapse", generate_timelapse, OUTPUT_DIR / "timelapse.mp4", (fps,)))
+        video_frames = output_frame_count(duration)
+        jobs.append(("Timelapse", generate_timelapse, OUTPUT_DIR / "timelapse.mp4", (duration, target_height), video_frames))
 
     start_total = time.time()
 
     progress_columns = (
         TextColumn("[bold blue]{task.fields[label]}"),
         BarColumn(),
+        TextColumn("{task.completed}/{task.total} frames"),
         TimeRemainingColumn(),
     )
 
     queue = mp.Queue()
     processes = []
     task_ids = {}
+    task_totals = {}
 
     with Progress(*progress_columns, console=console) as progress:
 
-        for label, func, out_path, extra_args in jobs:
-            task_ids[label] = progress.add_task("", total=len(images), label=label)
+        for label, func, out_path, extra_args, total in jobs:
+            task_ids[label] = progress.add_task("", total=total, label=label)
+            task_totals[label] = total
             p = mp.Process(target=worker, args=(func, images, out_path, extra_args, queue, label))
             processes.append(p)
             p.start()
@@ -135,16 +149,14 @@ def main():
             label, value = queue.get()
             if value == "DONE":
                 finished.add(label)
-                progress.update(task_ids[label], completed=len(images))
+                progress.update(task_ids[label], completed=task_totals[label])
             else:
                 progress.update(task_ids[label], completed=value)
 
         for p in processes:
             p.join()
 
-    results = [out_path for _, _, out_path, _ in jobs]
-    elapsed = time.time() - start_total
-
+    results = [out_path for _, _, out_path, _, _ in jobs]
     elapsed = time.time() - start_total
 
     console.print()
