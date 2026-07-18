@@ -10,3 +10,7 @@ output/
 .venv/
 venv/
 *.egg-info/
+
+# IDE project files (local to your machine, not the project)
+.idea/
+.vscode/

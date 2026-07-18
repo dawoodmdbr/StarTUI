@@ -1,9 +1,13 @@
 """
 Shared video writing backend.
 
-- Encodes at a fixed PLAYBACK_FPS so videos stay smooth regardless of how
-  many source photos there are (frames are stretched/repeated to fill the
-  chosen duration).
+- Guarantees every source image appears in the output at least once (no
+  frames silently dropped), for any duration you choose.
+- Targets a minimum of MIN_SMOOTH_FPS for smooth playback: if
+  num_images / duration would be lower than that, encoding fps is bumped
+  up (frames get repeated/held) to keep it smooth. If you have more source
+  images than duration * MIN_SMOOTH_FPS allows, fps scales up instead
+  (never drops a frame) so the requested duration is still hit exactly.
 - Resizes by target height only, preserving each image's native aspect
   ratio (no letterboxing/pillarboxing).
 - Prefers piping frames to ffmpeg for H.264 encoding, which plays reliably
@@ -17,12 +21,24 @@ import subprocess
 import cv2
 import numpy as np
 
-PLAYBACK_FPS = 30
+MIN_SMOOTH_FPS = 30
 
 
-def output_frame_count(duration):
-    """Total encoded frames for a given duration at PLAYBACK_FPS."""
-    return max(1, round(PLAYBACK_FPS * duration))
+def _plan(num_images, duration):
+    """
+    Decide how many output frames to encode and at what fps, guaranteeing
+    every source image is used at least once while still landing on the
+    exact requested duration.
+    """
+    total_frames = max(round(MIN_SMOOTH_FPS * duration), num_images)
+    fps = total_frames / duration
+    return total_frames, fps
+
+
+def output_frame_count(duration, num_images):
+    """Total encoded frames for a given duration and source image count."""
+    total_frames, _ = _plan(num_images, duration)
+    return total_frames
 
 
 def _target_size(w, h, target_height):
@@ -44,31 +60,30 @@ def _read_image(path):
     return frame
 
 
-def _frame_schedule(num_images, duration):
+def _frame_schedule(num_images, total_frames):
     """
-    Map each output frame (at PLAYBACK_FPS) to a source image index, so a
-    small number of source photos still plays back smoothly for the full
-    chosen duration. Always non-decreasing, so accumulation can be done
-    incrementally in a single pass.
+    Map each output frame to a source image index. Monotonically
+    non-decreasing, and guaranteed to hit every source index at least once
+    whenever total_frames >= num_images (which _plan always ensures).
     """
-    total_frames = output_frame_count(duration)
     return [min(num_images - 1, int(i * num_images / total_frames)) for i in range(total_frames)]
 
 
 def write_video(images, output_path, duration, target_height=None, accumulate=False, progress_callback=None):
     """
-    Write a video from a sequence of images, stretched/repeated to fill
-    `duration` seconds at a smooth constant frame rate.
+    Write a video from a sequence of images, using every image at least
+    once, timed to land exactly on `duration` seconds.
 
     target_height: resize to this height, preserving aspect ratio (None = native).
     accumulate=True builds a growing star trail (max-blend) as frames advance.
     """
-    schedule = _frame_schedule(len(images), duration)
+    total_frames, fps = _plan(len(images), duration)
+    schedule = _frame_schedule(len(images), total_frames)
 
     if shutil.which("ffmpeg"):
-        _write_with_ffmpeg(images, output_path, schedule, target_height, accumulate, progress_callback)
+        _write_with_ffmpeg(images, output_path, schedule, fps, target_height, accumulate, progress_callback)
     else:
-        _write_with_opencv(images, output_path, schedule, target_height, accumulate, progress_callback)
+        _write_with_opencv(images, output_path, schedule, fps, target_height, accumulate, progress_callback)
 
 
 def _resize_if_needed(frame, out_w, out_h):
@@ -79,7 +94,7 @@ def _resize_if_needed(frame, out_w, out_h):
     return cv2.resize(frame, (out_w, out_h), interpolation=interp)
 
 
-def _write_with_ffmpeg(images, output_path, schedule, target_height, accumulate, progress_callback):
+def _write_with_ffmpeg(images, output_path, schedule, fps, target_height, accumulate, progress_callback):
     first = _read_image(images[0])
     h, w = first.shape[:2]
     out_w, out_h = _target_size(w, h, target_height)
@@ -87,7 +102,7 @@ def _write_with_ffmpeg(images, output_path, schedule, target_height, accumulate,
     cmd = [
         "ffmpeg", "-y", "-loglevel", "error",
         "-f", "rawvideo", "-pix_fmt", "bgr24",
-        "-s", f"{out_w}x{out_h}", "-r", str(PLAYBACK_FPS),
+        "-s", f"{out_w}x{out_h}", "-r", str(fps),
         "-i", "-",
         "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p",
         "-movflags", "+faststart",
@@ -118,13 +133,13 @@ def _write_with_ffmpeg(images, output_path, schedule, target_height, accumulate,
     proc.wait()
 
 
-def _write_with_opencv(images, output_path, schedule, target_height, accumulate, progress_callback):
+def _write_with_opencv(images, output_path, schedule, fps, target_height, accumulate, progress_callback):
     first = _read_image(images[0])
     h, w = first.shape[:2]
     out_w, out_h = _target_size(w, h, target_height)
 
     fourcc = cv2.VideoWriter.fourcc(*"mp4v")
-    video = cv2.VideoWriter(str(output_path), fourcc, PLAYBACK_FPS, (out_w, out_h))
+    video = cv2.VideoWriter(str(output_path), fourcc, fps, (out_w, out_h))
 
     cache = {}
     trail = None

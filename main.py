@@ -22,7 +22,6 @@ from core.video_writer import output_frame_count
 
 console = Console()
 
-DURATION_CHOICES = ["5", "10", "15"]
 RESOLUTION_CHOICES = {"720p": 720, "1080p": 1080, "Original": None}
 INPUT_DIR = Path("input")
 OUTPUT_DIR = Path("output")
@@ -40,6 +39,16 @@ def banner():
 
 def get_images(folder):
     return sorted(Path(folder).glob("*.jpg"))
+
+
+def validate_duration(value):
+    try:
+        duration = float(value.strip())
+    except ValueError:
+        return "Enter a number, e.g. 2, 5, 15.5, 360"
+    if duration <= 0:
+        return "Duration must be greater than 0."
+    return True
 
 
 def worker(func, images, out_path, extra_args, queue, label):
@@ -82,11 +91,11 @@ def main():
     duration = None
     target_height = None
     if "trail_video" in outputs or "timelapse" in outputs:
-        duration = int(
-            questionary.select(
-                "Video duration (seconds):",
-                choices=DURATION_CHOICES,
+        duration = float(
+            questionary.text(
+                "Video duration in seconds (any number, e.g. 2, 5, 360):",
                 default="5",
+                validate=validate_duration,
             ).ask()
         )
         resolution = questionary.select(
@@ -101,7 +110,8 @@ def main():
     table.add_row("Frames found", str(len(images)))
     table.add_row("Outputs", ", ".join(outputs))
     if duration:
-        table.add_row("Duration", f"{duration}s")
+        duration_str = f"{duration:g}s"
+        table.add_row("Duration", duration_str)
         table.add_row("Resolution", resolution)
     console.print(table)
 
@@ -115,10 +125,10 @@ def main():
     if "image" in outputs:
         jobs.append(("Star Trail Image", generate_star_trail, OUTPUT_DIR / "startrail.jpg", (), len(images)))
     if "trail_video" in outputs:
-        video_frames = output_frame_count(duration)
+        video_frames = output_frame_count(duration, len(images))
         jobs.append(("Star Trail Video", generate_trail_video, OUTPUT_DIR / "trail_timelapse.mp4", (duration, target_height), video_frames))
     if "timelapse" in outputs:
-        video_frames = output_frame_count(duration)
+        video_frames = output_frame_count(duration, len(images))
         jobs.append(("Timelapse", generate_timelapse, OUTPUT_DIR / "timelapse.mp4", (duration, target_height), video_frames))
 
     start_total = time.time()
